@@ -1,0 +1,9 @@
+{
+  "id": "daily-md",
+  "name": "Daily Markdown",
+  "version": "0.1.0",
+  "description": "Daily tasking by carrying over unchecked markdown",
+  "author": "Sutton Bradley",
+  "authorUrl": "https://github.com/suttonbradley",
+  "isDesktopOnly": false
+}

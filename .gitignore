@@ -1,0 +1,10 @@
+node_modules
+.rts2_cache_cjs
+main.*
+*.log
+/target
+.DS_STORE
+Cargo.lock
+package-lock.json
+pkg/
+yarn.lock
