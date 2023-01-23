@@ -1,7 +1,7 @@
 mod command;
 mod date;
+mod error;
 mod obsidian;
-// mod setting_tab;
 
 use wasm_bindgen::prelude::*;
 

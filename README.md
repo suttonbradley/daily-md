@@ -17,6 +17,6 @@
         - that also applies if the parent checkbox was (accidentally) marked as complete (checkbox should be copied to the new day as incomplete)
 
 # Post-v0 TODO
+- [x] Better error handling and use of "?"
 - [ ] Allow user to set a directory other than "daily"
 - [ ] Restructure `expect`s into `obsidian::Notice::new` with no error
-- [ ] Better error handling and use of "?"

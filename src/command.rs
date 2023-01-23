@@ -1,7 +1,8 @@
+use crate::error::GenerateError;
 use crate::obsidian::{self, TFile};
 use crate::{date::Date, obsidian::Vault};
 
-use js_sys::{JsString, Promise};
+use js_sys::{self, JsString, Promise};
 use log::{debug, trace};
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{future_to_promise, JsFuture};
@@ -43,104 +44,113 @@ impl Generate {
         self.name = JsString::from(name)
     }
 
-    async fn get_file_contents(v: &Vault, f: &TFile) -> String {
-        JsFuture::from(v.read(f))
-            .await
-            .expect("Could not poll JsFuture")
-            .dyn_into::<JsString>()
-            .expect("Could not cast JsValue to JsString")
-            .as_string()
-            .expect("Could not convert from JsString to Rust String")
+    async fn get_file_contents(v: &Vault, f: Option<&TFile>) -> Option<String> {
+        if let Some(f) = f {
+            Some(
+                JsFuture::from(v.read(f))
+                    .await
+                    .expect("Could not poll JsFuture")
+                    .dyn_into::<JsString>()
+                    .expect("Could not cast JsValue to JsString")
+                    .as_string()
+                    .expect("Could not convert from JsString to Rust String"),
+            )
+        } else {
+            None
+        }
+    }
+
+    async fn generate_today() -> Result<(), GenerateError> {
+        // TODO make this configurable
+        let dir_name = "daily";
+
+        // Get vault
+        let vault = obsidian::plugin().app().vault();
+
+        // Get daily dir and cast to TFolder
+        let daily_dir = vault
+            .get_abstract_file_by_path(dir_name)
+            .map_err(|_| GenerateError::JsFunctionError("Vault.getAbstractFileByPath"))?
+            .ok_or(GenerateError::DailyDirNotFound(dir_name.to_string()))?;
+        trace!("Got \"{dir_name}\" as TAbstractFile");
+        let daily_dir: obsidian::TFolder = daily_dir
+            .dyn_into()
+            .map_err(|_| GenerateError::Misc("Failed to cast from TAbstractFile to TFolder"))?;
+
+        // Collect TFile-type children
+        let files: Vec<TFile> = daily_dir
+            .children()
+            .iter()
+            // Only children that correctly cast to TFile
+            .filter_map(|child| child.dyn_into::<obsidian::TFile>().ok())
+            .collect();
+
+        // Find latest daily md file, if exists
+        let latest_file = files
+            .iter()
+            // Map valid yyyy-mm-dd.md files to their date and handle
+            .filter_map(|f| {
+                if f.extension() != "md" {
+                    return None;
+                }
+                if let Ok(d) = Date::try_from(f.basename().as_string().unwrap().as_str()) {
+                    Some((f, d))
+                } else {
+                    None
+                }
+            })
+            .max_by(|(_, d1), (_, d2)| d1.cmp(d2));
+        if let Some(latest_file) = &latest_file {
+            debug!("Latest date is {:?}", latest_file.1);
+        } else {
+            debug!("Could not find any valid files of the form \"yyyy-mm-dd.md\"");
+        }
+        // TODO do this map attached to the max_by once this works
+        let latest_file = latest_file.map(|x| x.0);
+
+        // Ensure today's file does not already exist
+        if let Some(latest_file) = latest_file {
+            if latest_file.basename() == String::from(Date::today()) {
+                return Err(GenerateError::DailyFileAlreadyExists);
+            }
+        }
+
+        // Get latest daily md file contents
+        let latest_file_contents = Generate::get_file_contents(&vault, latest_file).await;
+        debug!("latest daily md file contents:\n{latest_file_contents:?}");
+
+        // Find every-day file, if exists, and get contents
+        let every_day_file = files
+            .iter()
+            .find(|f| f.basename() == "every-day" && f.extension() == "md");
+        let every_day_file_contents = Generate::get_file_contents(&vault, every_day_file).await;
+        debug!("latest every-day file contents:\n{every_day_file_contents:?}");
+
+        // Create today's file
+        JsFuture::from(
+            vault
+                .create(
+                    format!("{dir_name}/{}.md", String::from(Date::today())).as_str(),
+                    "",
+                )
+                .map_err(|_| GenerateError::JsFunctionError("Vault.create"))?,
+        )
+        .await
+        .map_err(|_| GenerateError::Misc("Failed to write daily file"))?;
+
+        Ok(())
     }
 
     pub fn callback(&self) -> Promise {
         future_to_promise(async move {
-            let daily_dir = "daily";
-            // Get vault
-            let vault = obsidian::plugin().app().vault();
-
-            // Find most recent daily markdown file
-            if let Some(daily) = vault
-                .get_abstract_file_by_path(daily_dir)
-                .expect("Could not make getAbstractFileByPath call")
-            {
-                trace!("Got \"{daily_dir}\" as TAbstractFile");
-
-                // Cast daily to TFolder
-                let daily: obsidian::TFolder =
-                    daily.dyn_into().expect("Could not coerce \"{daily_dir}\"");
-
-                // Collect children that succeed in casting to TFile
-                let files: Vec<obsidian::TFile> = daily
-                    .children()
-                    .iter()
-                    .filter_map(|child| child.dyn_into::<obsidian::TFile>().ok())
-                    .collect();
-                trace!("Iterating {} files under the \"daily\" folder", files.len());
-
-                // Get template file contents
-                if let Some(template_file) = files
-                    .iter()
-                    .find(|file| file.basename() == "template" && file.extension() == "md")
-                {
-                    trace!("Found template file");
-                    let contents = Generate::get_file_contents(&vault, template_file).await;
-                    debug!("Template file contents:\n{}", contents);
-                } else {
-                    obsidian::Notice::new(
-                        format!("ERROR (daily-md): could not find {daily_dir}/template.md")
-                            .as_str(),
-                    );
-                    // TODO leave function
+            match Generate::generate_today().await {
+                Ok(_) => Ok(JsValue::undefined()),
+                Err(e) => {
+                    let msg = format!("ERROR (daily-md): {e}");
+                    obsidian::Notice::new(&msg);
+                    Err(JsValue::from(js_sys::Error::new(&msg)))
                 }
-
-                // Get latest daily md file
-                let latest = files
-                    .iter()
-                    // Map only valid yyyy-mm-dd.md files to their date and handle
-                    .filter_map(|f| {
-                        if f.extension() != "md" {
-                            return None;
-                        }
-                        if let Ok(d) = Date::try_from(f.basename().as_string().unwrap().as_str()) {
-                            Some((f, d))
-                        } else {
-                            None
-                        }
-                    })
-                    .max_by(|(_, d1), (_, d2)| d1.cmp(d2));
-                if let Some(latest) = latest {
-                    debug!("Latest date is {:?}", latest.1);
-                } else {
-                    debug!("Could not find any valid files of the form \"yyyy-mm-dd.md\"");
-                }
-
-                // TODO deal with None (emtpy iter)
-                JsFuture::from(
-                    vault
-                        .create(
-                            format!("{daily_dir}/{}.md", String::from(Date::today())).as_str(),
-                            "",
-                        )
-                        .expect("Could not create daily note"),
-                )
-                .await
-                .expect("Could not poll JsFuture");
-            } else {
-                obsidian::Notice::new(
-                    format!("ERROR (daily-md): \"{daily_dir}\" directory not found").as_str(),
-                );
-                // TODO leave function
             }
-
-            // Output markdown
-            // TODO don't need to return future
-            JsFuture::from(
-                vault
-                    .create("foo.md", "foo\nbar\n")
-                    .expect("Could not create daily note"),
-            )
-            .await
         })
     }
 }
