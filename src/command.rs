@@ -1,4 +1,5 @@
 use crate::error::GenerateError;
+use crate::markdown::{TodoLine, DAILY_LINE};
 use crate::obsidian::{self, TFile};
 use crate::{date::Date, obsidian::Vault};
 
@@ -118,20 +119,39 @@ impl Generate {
         // Get latest daily md file contents
         let latest_file_contents = Generate::get_file_contents(&vault, latest_file).await;
         debug!("latest daily md file contents:\n{latest_file_contents:?}");
+        // Resolve lines carried over from the previous day
+        let carryover_lines = if let Some(c) = latest_file_contents {
+            TodoLine::from_file_contents(c)
+        } else {
+            vec![]
+        };
 
         // Find every-day file, if exists, and get contents
         let every_day_file = files
             .iter()
             .find(|f| f.basename() == "every-day" && f.extension() == "md");
         let every_day_file_contents = Generate::get_file_contents(&vault, every_day_file).await;
-        debug!("latest every-day file contents:\n{every_day_file_contents:?}");
+        debug!("every-day file contents:\n{every_day_file_contents:?}");
+
+        // Form file today's file
+        // Pulls every-day file content first, then carryover from most recent day
+        let mut contents = String::new();
+        if let Some(c) = every_day_file_contents {
+            contents.push_str(DAILY_LINE);
+            contents.push_str(c.as_str());
+            contents.push('\n');
+        }
+        for line in carryover_lines {
+            contents.push_str(line.to_string().as_str());
+            contents.push('\n');
+        }
 
         // Create today's file
         JsFuture::from(
             vault
                 .create(
                     format!("{dir_name}/{}.md", String::from(Date::today())).as_str(),
-                    "",
+                    contents.as_str(),
                 )
                 .map_err(|_| GenerateError::JsFunctionError("Vault.create"))?,
         )

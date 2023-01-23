@@ -1,6 +1,7 @@
 mod command;
 mod date;
 mod error;
+mod markdown;
 mod obsidian;
 
 use wasm_bindgen::prelude::*;

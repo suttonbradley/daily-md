@@ -18,5 +18,7 @@
 
 # Post-v0 TODO
 - [x] Better error handling and use of "?"
+- [ ] Optimization: get tab count on TodoLine _before_ pulling its contents to see if it's even worthwhile to do so
+    - A completed checkbox at a lesser tab count means we don't care about this content -- we're leaving it in the old file
 - [ ] Allow user to set a directory other than "daily"
 - [ ] Restructure `expect`s into `obsidian::Notice::new` with no error
